@@ -77,9 +77,6 @@ data 分为：
 - **Change In Cash And Cash Equivalents（现金及现金等价物的变动）**  
   衡量公司在一个财务周期内整体现金“进与出”的最终结果，投资者会关注公司是否有充足现金应对近期经营与投资需要。
 
-- **Depreciation, Depletion, And Amortization（折旧、耗竭及摊销）**  
-  记于经营活动现金流，非现金成本。常用于评估公司盈利质量及理解利润（EBITDA）与现金流的差异。
-
 - **Change In Operating Assets & Liabilities（经营资产与负债的变动）**  
   包括应收账款、应付账款、存货等变动；其幅度直接影响经营活动现金流，如存货增加太快或应收账款收回不及时，都会压缩现金流。
 
@@ -105,17 +102,8 @@ data 分为：
 - **Income Before Tax (incomeBeforeTax) - [税前利润]**  
   在计提所得税前的利润。  
 
-- **Income Tax Expense (incomeTaxExpense) - [所得税费用]**  
-  企业因利润而应支付的所得税金额。  
-
 - **Interest and Debt Expense (interestAndDebtExpense) - [利息及债务费用]**  
   企业因融资而产生的利息及相关债务费用。  
-
-- **Net Income from Continuing Operations (netIncomeFromContinuingOperations) - [持续经营净收益]**  
-  企业核心、持续经营业务所获得的净利润。  
-
-- **Comprehensive Income Net of Tax (comprehensiveIncomeNetOfTax) - [税后综合收益]**  
-  包含传统净利润及未在净利润中体现的其他收益或损失（如外币折算差额）。  
 
 - **Net Income (netIncome) - [净利润]**  
   企业扣除所有费用、利息与税项后的最终利润。
