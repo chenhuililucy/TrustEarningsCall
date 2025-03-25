@@ -3,11 +3,30 @@
 **Download earnings call dataset from my G-drive:**  
 [https://drive.google.com/file/d/1fE38K6rtUSARZEXFIWkFlqbVEwF6WQHi/view?usp=sharing](https://drive.google.com/file/d/1fE38K6rtUSARZEXFIWkFlqbVEwF6WQHi/view?usp=sharing)
 
+本次提供的 Google Drive 文件中，包含了经过实体屏蔽（entity mask）的财报电话会议（earnings transcript）。  
+删除其中的组织（org）与个人（person）信息，旨在避免在对数据进行分析时，可能因提前知晓相关组织或个人信息而产生的预判性偏见（*lookahead bias*）。
+
+在使用该数据集时，可依据以下原则进行处理与分析：
+
+1. **引用金融市场回报率（return）**  
+   - 依据数据集中给定的 *ticker*、季度（*q*）以及日期（*date*）等信息，对应到参考数据（reference data）中的收盘价格（close price），以此计算从特定 *date* 到 *date + h* 的“收盘到收盘”（close-to-close）回报率。  
+   - 该回报率主要用于测度标的股票在指定时间范围内的涨跌幅度。
+
+2. **结合三大财报信息**  
+   - 以季度（*q*）为基准，匹配公司所披露的三大财务报表数据（资产负债表、现金流量表、利润表）。  
+   - 结合财报数据与实际市场表现（例如上述回报率）相互印证，可用以评估企业在披露财务信息后的市场反应或长期表现。
+
 ---
 
-## Summary of dataset
+## Reference Data
 
 data 分为：
+
+---
+## prices
+
+每家公司的每日股票价格，一般我们会计算T+h的return（如close to close return）。T是earnings call发生的时间。h 是一个未来时间段，如1日，1周，1月等
+
 
 ## 三大报表
 
