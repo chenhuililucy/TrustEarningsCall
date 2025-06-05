@@ -1,0 +1,6 @@
+# --- Jupyter auto-save dirs ---
+**/.ipynb_checkpoints/
+
+# --- Python byte-code ---
+__pycache__/
+*.py[co]
