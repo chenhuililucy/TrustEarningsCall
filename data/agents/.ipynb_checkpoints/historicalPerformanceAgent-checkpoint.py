@@ -1,90 +1,64 @@
-import json
-import re
-from openai import OpenAI
-
-class HistoricalPerformanceAgent:
-    def __init__(self, credentials_file="credentials.json", model="gpt-3.5-turbo"):
-        """
-        Initializes the HistoricalPerformanceAgent by loading credentials and setting up OpenAI.
-        """
-        # --- Load credentials from JSON file ---
-        try:
-            with open(credentials_file, "r") as f:
-                creds = json.load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError("❌ Missing credentials.json file. Please ensure it exists.")
-
-        # --- OpenAI setup ---
-        self.api_key = creds["openai_api_key"]
-        self.client = OpenAI(api_key=self.api_key)
-        self.model = model
-
-    def _pretty_json(self, json_like):
-        """
-        Formats JSON-like strings into pretty-printed JSON.
-        """
-        if not json_like or json_like == "[]":
-            return "[]"
-        try:
-            if isinstance(json_like, str):
-                obj = json.loads(json_like)
-            else:
-                obj = json_like
-            return json.dumps(obj, indent=2)
-        except Exception:
-            return str(json_like)
-
-    def callAgent(self, fact,row):
-        """
-        Calls the LLM to compare the current fact with the firm's past financial statements.
-        
-        Args:
-            row (dict or pd.Series): A row from the DataFrame containing historical financials.
-            fact (dict): A parsed fact dictionary.
-
-        Returns:
-            str: The model's generated analysis text.
-        """
-        try:
-            # Load prior financials
-            prior_income = self._pretty_json(row.get("prior_income_statement", "[]"))
-            prior_balance = self._pretty_json(row.get("prior_balance_sheet", "[]"))
-            prior_cash = self._pretty_json(row.get("prior_cash_flow_statement", "[]"))
-
-            prompt = f"""
-You are analyzing a company’s earnings call transcript alongside its past statement, balance sheet, and cash flow statement.
-
-Fact:
-{json.dumps(fact, indent=2)}
-
-Your task is to:
-- Compare the firm's performance this quarter with its past performance.
-- In a sentence or two, describe how this comparison may predict the stock’s likely direction and intensity of movement **one trading day after the call**.
-
-A list of income statements from past quarters:
-{prior_income}
-
-A list of balance sheets from past quarters:
-{prior_balance}
-
-A list of cash flow statements from past quarters:
-{prior_cash}
-
-- Keep your analysis under 2 sentences in length. Only output your analysis without any other text.
-
+"""historical_performance_agent.py – Batch‑aware version
+=======================================================
+`run()` now accepts a **list of facts** so the model can compare all of them to
+past financial statements in a single prompt.
 """
 
-            response = self.client.chat.completions.create(
+from __future__ import annotations
+from pathlib import Path
+import json
+from pathlib import Path
+from typing import List, Dict, Any
+
+from openai import OpenAI
+from agents.prompts.prompts import financials_statement_agent_prompt
+# -------------------------------------------------------------------------
+class HistoricalPerformanceAgent:
+    """Compare current-quarter facts with prior financial statements."""
+
+    def __init__(self, credentials_file: str = "credentials.json", model: str = "gpt-4o-mini") -> None:
+        creds = json.loads(Path(credentials_file).read_text())
+        self.client = OpenAI(api_key=creds["openai_api_key"])
+        self.model = model
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _pretty_json(obj: Any) -> str:
+        if obj in (None, "", "[]"):
+            return "[]"
+        try:
+            return json.dumps(json.loads(obj) if isinstance(obj, str) else obj, indent=2)
+        except Exception:
+            return str(obj)
+
+    # ------------------------------------------------------------------
+    def run(self, facts: List[Dict[str, str]], row) -> str:
+        """Batch‑aware comparison with historical financial statements."""
+        if not facts:
+            return "No facts provided."
+
+        prior_income = self._pretty_json(row.get("prior_income_statement", "[]"))
+        prior_balance = self._pretty_json(row.get("prior_balance_sheet", "[]"))
+        prior_cash = self._pretty_json(row.get("prior_cash_flow_statement", "[]"))
+
+        # Use the shared template for *each* fact and aggregate responses
+        analyses: List[str] = []
+        for fact in facts:
+            prompt = financials_statement_agent_prompt(
+                fact=fact,
+                prior_income=prior_income,
+                prior_balance=prior_balance,
+                prior_cash=prior_cash,
+            )
+            resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a financial forecasting assistant."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
-                temperature=0
+                temperature=0,
             )
+            analyses.append(resp.choices[0].message.content.strip())
 
-            raw_output = response.choices[0].message.content.strip()
-            return raw_output
-
-        except Exception as e:
-            return f"❌ Exception: {str(e)}"
+        # Return all mini-analyses joined by newlines so the caller gets a single chat-friendly string
+        return "".join(analyses)

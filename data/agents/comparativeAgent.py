@@ -1,142 +1,104 @@
+"""comparative_agent.py – Batch‑aware ComparativeAgent
+======================================================
+This rewrite lets `run()` accept a **list of fact‑dicts** (rather than one) so
+all related facts can be analysed in a single LLM prompt.
+"""
+
+from __future__ import annotations
+
 import json
 import re
-from openai import OpenAI
+from pathlib import Path
+from typing import Any, Dict, List, Sequence
+
+from langchain_openai import OpenAIEmbeddings
 from neo4j import GraphDatabase
-from langchain_openai import OpenAIEmbeddings  # 🆕 real embedder
+from openai import OpenAI
 
+from agents.prompts.prompts import comparative_agent_prompt
+
+# -------------------------------------------------------------------------
 class ComparativeAgent:
-    def __init__(self, credentials_file="credentials.json", model="gpt-3.5-turbo"):
-        """
-        Initializes the ComparativeAgent by reading credentials and setting up everything internally.
-        """
-        # --- Load credentials ---
-        try:
-            with open(credentials_file, "r") as f:
-                creds = json.load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError("❌ Missing credentials.json file. Please ensure it exists.")
+    """Compare a batch of facts against peer data stored in Neo4j."""
 
-        # --- OpenAI Client ---
-        self.api_key = creds["openai_api_key"]
-        self.client = OpenAI(api_key=self.api_key)
+    def __init__(self, credentials_file: str = "credentials.json", model: str = "gpt-4o-mini") -> None:
+        creds = json.loads(Path(credentials_file).read_text())
+        self.client = OpenAI(api_key=creds["openai_api_key"])
         self.model = model
-
-        # --- Neo4j Driver ---
         self.driver = GraphDatabase.driver(
-            creds["neo4j_uri"],
-            auth=(creds["neo4j_username"], creds["neo4j_password"])
+            creds["neo4j_uri"], auth=(creds["neo4j_username"], creds["neo4j_password"])
         )
+        self.embedder = OpenAIEmbeddings(openai_api_key=creds["openai_api_key"])
 
-        # --- Real Embedder using LangChain ---
-        self.embedder = OpenAIEmbeddings(openai_api_key=self.api_key)
-
-    def search_similar_facts(self, query_text, ticker, current_quarter, top_k=100):
-        """
-        Search for similar :Fact nodes with matching ticker and earlier quarters.
-        Adds debugging to inspect embedding, query parameters, and raw Neo4j results.
-        """
-        query_vector = self.embedder.embed_query(query_text)
-    
-        with self.driver.session() as session:
-            print(f"🚀 Running vector search with top_k={top_k}, ticker={ticker}, current_quarter={current_quarter}")
-            result = session.run("""
-                CALL db.index.vector.queryNodes('searchable-index', $topK, $embedding)
+    # ------------------------------------------------------------------
+    # Vector search helper
+    # ------------------------------------------------------------------
+    def _search_similar(self, query: str, top_k: int = 30) -> List[Dict[str, Any]]:
+        vec = self.embedder.embed_query(query)
+        with self.driver.session() as ses:
+            res = ses.run(
+                """
+                CALL db.index.vector.queryNodes('fact_index', $topK, $vec)
                 YIELD node, score
-                RETURN node.uuid AS uuid,
-                       node.text AS text,
-                       node.metric AS metric,
-                       node.value AS value,
-                       node.reason AS reason,
-                       node.ticker AS ticker,
-                       node.quarter AS quarter,
-                       score
+                RETURN node.text AS text, node.metric AS metric, node.value AS value,
+                       node.reason AS reason, node.ticker AS ticker,
+                       node.quarter AS quarter, score
                 ORDER BY score DESC
-            """, {
-                "topK": top_k,
-                "embedding": query_vector,
-                "ticker": ticker,
-                "currentQuarter": current_quarter
-            })
-    
-            rows = [row for row in result]
-    
-            return [{
-                "uuid": row["uuid"],
-                "metric": row["metric"],
-                "value": row["value"],
-                "reason": row["reason"],
-                "text": row["text"],
-                "ticker": row["ticker"],
-                "quarter": row["quarter"],
-                "score": row["score"]
-            } for row in rows]
-    
+                """,
+                {"topK": top_k, "vec": vec},
+            )
+            return [dict(r) for r in res]
 
-    def callAgent(self, fact, related_facts):
-        """
-        Calls the LLM with the firm-specific fact and its related comparables.
-        """
-        prompt = f"""
-You are analyzing a company’s earnings call transcript alongside statements made by similar firms.
+    # ------------------------------------------------------------------
+    def _to_query(self, fact: Dict[str, str]) -> str:
+        parts = []
+        if fact.get("metric"):
+            parts.append(f"Metric: {fact['metric']}")
+        if fact.get("value"):
+            parts.append(f"Value: {fact['value']}")
+        if fact.get("context"):
+            parts.append(f"Reason: {fact['context']}")
+        return " | ".join(parts)
 
-The specific fact about the firm is:
-{json.dumps(fact, indent=2)}
+    # ------------------------------------------------------------------
+    def run(
+        self,
+        facts: List[Dict[str, str]],
+        ticker: str,
+        quarter: str,
+        peers: Sequence[str] | None = None,
+        top_k: int = 50,
+    ) -> str:
+        """Analyse a batch of facts; return one consolidated LLM answer."""
+        if not facts:
+            return "No facts supplied."
 
-Here is a JSON list of related facts from comparable firms:
-{json.dumps(related_facts, indent=2)}
-
-Your task is:
-- Using these materials, in a sentence or two, describe how the firm's performance compares with other firms how this may allow you to predict the stock’s likely direction and intensity of movement.
-
-- Keep your analysis under 2 sentences in length. Only output your analysis without any other text.
-- Cite factual evidence from historical calls
-
-"""
+        # --- Build a combined query string (concatenate all metrics/values) ---
+        query = " || ".join(self._to_query(f) for f in facts if f)
+        related = self._search_similar(query, top_k=top_k)
+        print(related)
+        # --- Craft prompt --------------------------------------------------
+        prompt = comparative_agent_prompt({"batch_of": len(facts)}, related)
+        # The template expects a 'fact' field; we pass a stub + list length.
+        prompt = (
+            "The following is a *batch* of facts for the same company/quarter:\n"
+            + json.dumps(facts, indent=2)
+            + "\n\n" + prompt
+        )
+        
         try:
-            response = self.client.chat.completions.create(
+            resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a financial forecasting assistant."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
-                temperature=0
+                temperature=0,
             )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            return f"❌ Exception: {str(e)}"
+            return resp.choices[0].message.content.strip()
+        except Exception as exc:
+            return f"❌ ComparativeAgent error: {exc}"
 
-    def run(self, fact, ticker, current_quarter, top_k=10):
-        """
-        Runs the HistoricalEarningsAgent on a single parsed fact.
-        Formats a combined query string using metric, value, and reason for better semantic search.
-        """
-        metric = fact.get("metric", "").strip()
-        value = fact.get("value", "").strip()
-        reason = fact.get("reason", "").strip()
-    
-        # --- Step 1: Build a nicely formatted query text ---
-        components = []
-        if metric:
-            components.append(f"Metric: {metric}")
-        if value:
-            components.append(f"Value: {value}")
-        if reason:
-            components.append(f"Reason: {reason}")
-    
-        query_text = " | ".join(components)  # Join components with a separator
-    
-        if not query_text:
-            return "❌ No meaningful query text found in fact to search similar nodes."
-    
-        # --- Step 2: Search for related facts ---
-        related_facts = self.search_similar_facts(
-            query_text=query_text,
-            ticker=ticker,
-            current_quarter=current_quarter,
-            top_k=top_k
-        )
-        
-        # --- Step 3: Analyze using the LLM ---
-        output = self.callAgent(fact, related_facts)
-    
-        return output
+    # ------------------------------------------------------------------
+    def close(self) -> None:
+        self.driver.close()
